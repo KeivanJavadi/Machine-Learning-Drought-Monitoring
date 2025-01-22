@@ -1,0 +1,235 @@
+
+// Define the administrative boundary  
+var admin2 = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level2");  
+var selected = admin2.filter(ee.Filter.eq('ADM2_NAME', 'Masal'));  
+var geometry = selected.geometry();  
+var roi = geometry;
+
+Map.centerObject(roi);  
+
+var time_start = '2001-01-01', time_end = '2024-12-31';  
+
+// NDVI Collection and min/max
+var ndvi = ee.ImageCollection("MODIS/061/MOD13A2")
+  .select('NDVI')
+  .filterDate(time_start, time_end);
+  
+var ndvi_min = ndvi.min().multiply(0.0001);  
+var ndvi_max = ndvi.max().multiply(0.0001);  
+
+// Function to convert data into monthly format
+function temporal_collection(collection, start, count, interval, unit) {  
+  var seq = ee.List.sequence(0, ee.Number(count).subtract(1));  
+  var origin_date = ee.Date(start);  
+  return ee.ImageCollection(seq.map(function(i) {  
+    var start_date = origin_date.advance(ee.Number(interval).multiply(i), unit);  
+    var end_date = origin_date.advance(ee.Number(interval).multiply(ee.Number(i).add(1)), unit);  
+    return collection.filterDate(start_date, end_date).mean()  
+      .set('system:time_start', start_date.millis())  
+      .set('system:time_end', end_date.millis());  
+  }));  
+}  
+
+// Monthly NDVI Image Collection  
+var ndvi_monthly = temporal_collection(ndvi, time_start, 276, 1, 'month');  
+
+// VCI Calculation
+var VCI = ndvi_monthly.map(function(img) {  
+  var index = img.expression('(ndvi - min) / (max - min)', {  
+    'ndvi': img.select('NDVI').multiply(0.0001),  
+    'min': ndvi_min,  
+    'max': ndvi_max  
+  });  
+  return index.rename('VCI').copyProperties(img, img.propertyNames());  
+}).map(function(image) {  
+  return image.clip(geometry); 
+});    
+Map.addLayer(VCI, {min: 0, max: 1, palette: ['ffffff', 'ce7e45', 'df923d', 'f1b555', 'fcd163', '99b718', '74a901', '66a000', '529400', '3e8601', '207401', '056201', '004c00', '023b01', '012e01', '011d01', '011301']}, 'VCI');
+
+// TCI Calculation
+var temp = ee.ImageCollection("MODIS/061/MOD11A2")  
+  .select('LST_Day_1km')  
+  .filterDate(time_start, time_end); 
+
+var temp_max = temp.max().multiply(0.02);  
+var temp_min = temp.min().multiply(0.02);  
+
+var temp_monthly = temporal_collection(temp, time_start, 276, 1, 'month');  
+
+var TCI = temp_monthly.map(function(img) {  
+  var index = img.expression('(max - lst) / (max - min)', {  
+    'max': temp_max,  
+    'min': temp_min,  
+    'lst': img.multiply(0.02)  
+  });  
+  return index.rename('TCI').copyProperties(img, img.propertyNames());  
+}).map(function(image) {  
+  return image.clip(geometry); 
+});  
+Map.addLayer(TCI, {}, 'TCI');
+
+// PCI Calculation
+var pre = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")  
+  .select('precipitation') 
+  .filterBounds(geometry)
+  .filterDate(time_start, time_end);
+
+var pre_max = pre.max();  
+var pre_min = pre.min();  
+
+var pre_monthly = temporal_collection(pre, time_start, 276, 1, 'month');  
+
+var PCI = pre_monthly.map(function(img) {  
+  var index = img.expression('(max - lst) / (max - min)', {  
+    'max': pre_max,  
+    'min': pre_min,  
+    'lst': img
+  });  
+  return index.rename('PCI').copyProperties(img, img.propertyNames());  
+}).map(function(img) {  
+  return img.clip(geometry);  
+});  
+Map.addLayer(PCI, {min: 0, max: 1, palette: ['001137', '0aab1e', 'e7eb05', 'ff4a2d', 'e90000']}, 'PCI');
+
+// ECI Calculation
+var ET = ee.ImageCollection("MODIS/061/MOD16A2GF") 
+  .select('ET')  
+  .filterDate(time_start, time_end); 
+
+var ET_max = ET.max().multiply(0.1);  
+var ET_min = ET.min().multiply(0.1);  
+
+var ET_monthly = temporal_collection(ET, time_start, 276, 1, 'month');  
+
+var ECI = ET_monthly.map(function(img) {  
+  var index = img.expression('(max - lst) / (max - min)', {  
+    'max': ET_max,  
+    'min': ET_min,  
+    'lst': img.multiply(0.1)  
+  });  
+  return index.rename('ECI').copyProperties(img, img.propertyNames());  
+}).map(function(image) {  
+  return image.clip(geometry);  
+});  
+Map.addLayer(ECI, {}, 'ECI');
+
+// SMCI Calculation
+var sm = ee.ImageCollection("NASA/GLDAS/V021/NOAH/G025/T3H") 
+  .select('SoilMoi10_40cm_inst')  
+  .filterDate(time_start, time_end); 
+
+var sm_max = sm.max();  
+var sm_min = sm.min();  
+
+var sm_monthly = temporal_collection(sm, time_start, 276, 1, 'month');  
+
+var SMCI = sm_monthly.map(function(img) {  
+  var index = img.expression('(max - lst) / (max - min)', {  
+    'max': sm_max,  
+    'min': sm_min,  
+    'lst': img
+  });  
+  return index.rename('SMCI').copyProperties(img, img.propertyNames());  
+}).map(function(image) {  
+  return image.clip(geometry);  
+});  
+Map.addLayer(SMCI, {}, 'SMCI');
+
+// SPEI Calculation
+var spei = ee.ImageCollection("CSIC/SPEI/2_9")  
+  .select('SPEI_12_month')  
+  .filterDate(time_start, time_end).map(function(img) {  
+  return img.clip(geometry);  
+}); 
+
+var spei_monthly = temporal_collection(spei, time_start, 276, 1, 'month');  
+Map.addLayer(spei_monthly, {}, 'SPEI');
+
+// Combine all indices
+var modis_indices = spei_monthly.combine(TCI).combine(SMCI).combine(PCI).combine(ECI);  
+
+// Output charts
+print(ui.Chart.image.series(modis_indices, roi, ee.Reducer.mean(), 1000, 'system:time_start'));
+print(ui.Chart.image.series(modis_indices.select('SPEI_12_month', 'TCI','SMCI','PCI','ECI'), roi, ee.Reducer.mean(), 1000, 'system:time_start'));
+
+// Combine Images and Sample Data
+var combined = ee.Image.cat(spei_monthly.mean(), TCI.mean(), SMCI.mean(), PCI.mean(), ECI.mean());
+
+var sample = combined.sample({
+  numPixels: 5000,
+  region: geometry,
+  scale: 300,
+  geometries: true
+}).randomColumn();
+Map.addLayer(sample, {}, 'Sample', false);
+
+// Split into train and test
+var train = sample.filter(ee.Filter.lte('random', 0.8));
+var test = sample.filter(ee.Filter.gt('random', 0.8));
+print('Train size', train.size(), 'Test size', test.size());
+
+// Do Random Forest Regression with Hyperparameter Tuning
+var numTrees = 100; // Adjusted number of trees
+var seed = 0; // Fixed seed for reproducibility
+var regression = ee.Classifier.smileRandomForest({
+  numberOfTrees: numTrees,
+  seed: seed
+}).train({
+  features: train,
+  classProperty: 'SPEI_12_month',
+  inputProperties: ['TCI', 'SMCI', 'PCI', 'ECI']
+}).setOutputMode('REGRESSION');
+print('Regression RF', regression.explain());
+
+// Make Prediction
+var predictionSPEI = combined.classify(regression, 'SPEI_Prediction');
+Map.addLayer(predictionSPEI, { min: 0, max: 50, palette: ['purple', 'blue', 'cyan', 'green', 'yellow', 'red']}, 'SPEI Prediction');
+
+// Classify test data for accuracy test
+var testData = test.classify(regression, 'SPEI_Prediction').map(function(data) {
+  return data.set('line', data.get('SPEI_12_month'));
+});
+
+// Show accuracy in chart
+var chart = ui.Chart.feature.byFeature(testData, 'SPEI_12_month')
+
+var chart = ui.Chart.feature.byFeature(testData, 'SPEI_12_month', ['line', 'SPEI_Prediction'])
+  .setChartType('ScatterChart')
+  .setOptions({
+    dataOpacity: 0.3,
+    title: 'SPEI Actual vs Prediction',
+    hAxis: { title: 'SPEI Actual' },
+    vAxis: { title: 'SPEI Prediction' },
+    series: {
+      0: {
+        pointSize: 0,
+        pointsVisible: false,
+        visibleInLegend: false
+      },
+      1: {
+        color: 'blue'
+      }
+    },
+    trendlines: {
+      0: {
+        opacity: 1,
+        type: 'linear',
+        color: 'red',
+        visibleInLegend: false
+      },
+      1: {
+        opacity: 0.3,
+        type: 'linear',
+        showR2: true,
+        color: 'blue',
+        visibleInLegend: true
+      }
+    }
+  });
+print(chart);
+
+
+
+
+
+
